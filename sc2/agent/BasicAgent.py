@@ -13,6 +13,8 @@ class TerranBasicAgent(base_agent.BaseAgent):
         self.base_top_left = None
         self.supply_depot_built = False
         self.barracks_built = False
+        self.barracks_cnt = 0
+        self.select_flag = False
         self.barracks_rallied = False
         self.army_rallied = False
 
@@ -34,6 +36,7 @@ class TerranBasicAgent(base_agent.BaseAgent):
         return [mean_x, mean_y]
 
     def unit_type_is_selected(self, obs, unit_type):
+        # just check unit is selected
         if (len(obs.observation.single_select) > 0 and
                 obs.observation.single_select[0].unit_type == unit_type):
             return True
@@ -51,6 +54,16 @@ class TerranBasicAgent(base_agent.BaseAgent):
     def can_do(self, obs, action):
         return action in obs.observation.available_actions
 
+    def select_SCV(self, obs):
+        # select SCV
+        scvs = self.get_units_by_type(obs, units.Terran.SCV)
+        if len(scvs) > 0:
+            # random choice one SCV
+            scv = random.choice(scvs)
+            # retrun point of selected SCV
+            return actions.FUNCTIONS.select_point("select", (scv.x,
+                                                             scv.y))
+
     def step(self, obs):
         super(TerranBasicAgent, self).step(obs)
 
@@ -60,6 +73,8 @@ class TerranBasicAgent(base_agent.BaseAgent):
             self.base_top_left = None
             self.supply_depot_built = False
             self.barracks_built = False
+            self.barracks_cnt = 0
+            self.select_flag = False
             self.barracks_rallied = False
             self.army_rallied = False
 
@@ -68,6 +83,7 @@ class TerranBasicAgent(base_agent.BaseAgent):
             self.base_top_left = 1 if player_y.any() and player_y.mean() <= 31 else 0
 
         if not self.supply_depot_built:
+            # scv is selected
             if self.unit_type_is_selected(obs, units.Terran.SCV):
                 if self.can_do(obs, actions.FUNCTIONS.Build_SupplyDepot_screen.id):
                     ccs = self.get_units_by_type(obs, units.Terran.CommandCenter)
@@ -77,48 +93,79 @@ class TerranBasicAgent(base_agent.BaseAgent):
                         self.supply_depot_built = True
 
                         return actions.FUNCTIONS.Build_SupplyDepot_screen("now", target)
-            scvs = self.get_units_by_type(obs, units.Terran.SCV)
-            if len(scvs) > 0:
-                scv = random.choice(scvs)
-                return actions.FUNCTIONS.select_point("select", (scv.x,
-                                                                 scv.y))
+
+            return self.select_SCV(obs)
+
+        ###############################################
+        # modify - Two barracks
+        ###############################################
         elif not self.barracks_built:
             if self.unit_type_is_selected(obs, units.Terran.SCV):
                 if self.can_do(obs, actions.FUNCTIONS.Build_Barracks_screen.id):
                     ccs = self.get_units_by_type(obs, units.Terran.CommandCenter)
                     if len(ccs) > 0:
                         mean_x, mean_y = self.getMeanLocation(ccs)
-                        target = self.transformLocation(int(mean_x), 20, int(mean_y), 0)
-                        self.barracks_built = True
+                        target = self.transformLocation(int(mean_x), random.randint(0,20), int(mean_y), random.randint(0,20))
+
+                        # count num of barracks
+                        self.barracks_cnt = len(self.get_units_by_type(obs, units.Terran.Barracks))
+
+                        print("barracks : {}".format(self.barracks_cnt))
+
+                        # check built two barracks
+                        if self.barracks_cnt == 2:
+                            print("{} barracks are built".format(self.barracks_cnt))
+                            self.barracks_built = True
+                            self.barracks_cnt = 0 # reset for using rally action
 
                         return actions.FUNCTIONS.Build_Barracks_screen("now", target)
-            scvs = self.get_units_by_type(obs, units.Terran.SCV)
-            if len(scvs) > 0:
-                scv = random.choice(scvs)
-                return actions.FUNCTIONS.select_point("select", (scv.x,
-                                                                 scv.y))
+
+            return self.select_SCV(obs)
 
         elif not self.barracks_rallied:
-            if self.unit_type_is_selected(obs, units.Terran.Barracks):
-                self.barracks_rallied = True
+            '''
+            if multi barracks, need two actions
+                1. select one barrack
+                2. rally
+                and loop
+            '''
+            time.sleep(0.5)
+            # 1. select one barrack
+            if not self.select_flag:
+                # when multi barracks, select order by barracks list
+                # get barracks list
+                barracks = self.get_units_by_type(obs, units.Terran.Barracks)
+
+                # select barrack
+                if len(barracks) > 0:
+                    barrack = barracks[self.barracks_cnt]
+                    print("[Barrack {}] is selected]".format(self.barracks_cnt+1))
+                    self.barracks_cnt += 1
+                    self.select_flag = True
+                    return actions.FUNCTIONS.select_point("select", (barrack.x,
+                                                                     barrack.y))
+
+            if self.select_flag: # just selected, go rally
+                print("[Barrack {}] is rallied]".format(self.barracks_cnt))
+
+                if self.barracks_cnt == len(self.get_units_by_type(obs, units.Terran.Barracks)):
+                    self.barracks_rallied = True
+
+                self.select_flag = False
 
                 if self.base_top_left:
                     return actions.FUNCTIONS.Rally_Units_minimap("now", [29, 21])
                 else:
                     return actions.FUNCTIONS.Rally_Units_minimap("now", [29, 46])
-            barracks = self.get_units_by_type(obs, units.Terran.Barracks)
-            if len(barracks) > 0:
-                barrack = random.choice(barracks)
-                return actions.FUNCTIONS.select_point("select", (barrack.x,
-                                                                 barrack.y))
+
+        # train marine
         elif obs.observation.player.food_cap - obs.observation.player.food_used:
             if self.can_do(obs, actions.FUNCTIONS.Train_Marine_quick.id):
                 return actions.FUNCTIONS.Train_Marine_quick("queued")
 
+        # attack & attack
         elif not self.army_rallied:
             if self.can_do(obs, actions.FUNCTIONS.Attack_minimap.id):
-                self.army_rallied = True
-
                 if self.base_top_left:
                     return actions.FUNCTIONS.Attack_minimap("now", [39, 45])
                 else:
