@@ -16,6 +16,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from skdrl.pytorch.model.mlp import NaiveMultiLayerPerceptron
+from skdrl.pytorch.model.cnn import CNNFC
 from skdrl.common.memory.memory import ExperienceReplayMemory
 from skdrl.pytorch.model.dqn import DQN, prepare_training_inputs
 
@@ -170,15 +171,18 @@ class TerranRLAgentWithRawActsAndRawObs(TerranAgentWithRawActsAndRawObs):
 
         self.qnetwork = NaiveMultiLayerPerceptron(input_dim=self.s_dim,
                            output_dim=self.a_dim,
-                           num_neurons=[128],
+                           num_neurons=[128, 64, 32],
                            hidden_act_func='ReLU',
                            out_act_func='Identity').to(device)
 
         self.qnetwork_target = NaiveMultiLayerPerceptron(input_dim=self.s_dim,
                            output_dim=self.a_dim,
-                           num_neurons=[128],
+                           num_neurons=[128, 64, 32],
                            hidden_act_func='ReLU',
                            out_act_func='Identity').to(device)
+
+        #self.qnetwork = CNNFC(output_dim=self.a_dim).to(device)
+        #self.qnetwork_target = CNNFC(output_dim=self.a_dim).to(device)
 
         if os.path.isfile(self.data_file_qnet + '.pt'):
             self.qnetwork.load_state_dict(torch.load(self.data_file_qnet + '.pt'))
@@ -280,13 +284,36 @@ class TerranRLAgentWithRawActsAndRawObs(TerranAgentWithRawActsAndRawObs):
                 len(enemy_completed_barrackses),
                 len(enemy_marines))
 
+    def get_minimap(self, obs):
+        minimap = np.array(obs.observation.feature_minimap[features.MINIMAP_FEATURES.player_relative.index], dtype=np.float32)
+        #minimap = np.array(obs.observation.feature_minimap, dtype=np.float32)
+        # [32, 32]
+        #print(minimap.shape)
+        return minimap
+
+    def get_screen(self, obs):
+        screen = np.array(obs.observation.feature_screen[features.SCREEN_FEATURES.player_relative.index], dtype=np.float32)
+        #screen = np.array(obs.observation.feature_screen, dtype=np.float32)
+        # [32, 32]
+        #print(screen.shape)
+        return screen
+
     def step(self, obs):
         super(TerranRLAgentWithRawActsAndRawObs, self).step(obs)
 
         #time.sleep(0.5)
 
+        mninmap = self.get_minimap(obs)
+        screen = self.get_screen(obs)
+        minimap = np.reshape(minimap, (1, -1))
+        screen = np.reshape(screen, (1, -1))
+        map_screen = np.concatenate((minimap, screen), axis=-1)
+        map_screen = torch.tensor(map_screen).float().to(device)
+
         state = self.get_state(obs)
         state = torch.tensor(state).float().view(1, self.s_dim).to(device)
+        state = torch.cat((map_screen, state), -1)
+
         action_idx = self.dqn.choose_action(state)
         action = self.actions[action_idx]
         done = True if obs.last() else False
@@ -297,6 +324,7 @@ class TerranRLAgentWithRawActsAndRawObs(TerranAgentWithRawActsAndRawObs):
                           torch.tensor(obs.reward).view(1, 1).to(device),
                           state.to(device),
                           torch.tensor(done).view(1, 1).to(device))
+                          #map_screen.to(device))
             self.memory.push(experience)
 
         self.cum_reward += obs.reward
@@ -423,6 +451,8 @@ def main(unused_argv):
                    action_space=actions.ActionSpace.RAW,
                    use_raw_units=True,
                    raw_resolution=64,
+                   feature_screen=32,
+                   feature_minimap=32
                ),
                step_mul=8,
                disable_fog=True,
